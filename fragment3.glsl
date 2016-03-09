@@ -81,7 +81,7 @@ float scene(vec3 pos) {
     float combine;
     float temp_res = box;
     
-    for (int cnt=0; cnt<3; cnt++) {
+    for (int cnt=0; cnt<4; cnt++) {
         vec3 a = mod(pos*s+1.0, 2.0)-1.0;
         
         s*=split;
@@ -144,7 +144,7 @@ vec3 calcNormal(in vec3 pos) {
 
 
 uniform float z_amp = 0.01; // ui(0.0, 1.0)
-uniform sampler2D color_map; // path(d:/shaders/julia2.png)
+uniform sampler2D color_map; // path(d:/shaders/red.png)
 uniform sampler2D height_map; // path(d:/shaders/clouds.png)
 
 
@@ -220,14 +220,14 @@ void main()
     vec3 ta = vec3( cx+iGlobalTime*time_boost, cy, cz);//cos(iGlobalTime), sin(iGlobalTime) );
     vec2 p = -1.0+2.0*uv;
 
-    //p=HmdWarp(p);
+    /*p=HmdWarp(p);
 
     if(abs(p.x)>1.0 || abs(p.y) > 1.0) {
         color = vec3(0.0);//texture(color_map, uv).rgb;
         return;
         //discard;
     }
-
+*/
     seed = p.x + p.y * 3.43121412313 + iGlobalTime;
     ro.x = ro.x + 0.01*sin(seed+p.x+p.y);
     mat3 cam_to_world = setCamera(ro, ta, 0.0);
@@ -237,11 +237,13 @@ void main()
     vec3 o_ro = ro;
     vec3 o_rd = rd;
     color = vec3(0.0,0.0,0.0);
+    
     for (int samples = 0; samples<1; samples++) {
         float d = 0.0;
         ro = o_ro;
         rd = o_rd;
-        for (int depth=0; depth<2; depth++) {
+        vec3 mask = vec3(1.0);
+        for (int depth=0; depth<5; depth++) {
             float t = castRay(ro, rd, .01, max_dist);
             if (t>0.0) {
                 vec3 inter = vec3(ro+rd*t);
@@ -256,24 +258,26 @@ void main()
 
                 float t_light = castRay(inter+lightDir*light_dist, -lightDir, 0.1, light_dist+1.0);
                 float diffuse = dot(lightDir, normal);
-                /*t_light<0.0 || t_light > light_dist) {*/  
+                /*t_light<0.0 || t_light > light_dist) {*/
+                vec3 lc; 
                 if ((abs(light_dist-t_light)<0.01)) { 
                     //if (normal.y > .9) {            
-                        color += vec3(diffuse*1.0) * tex3D(color_map, inter, normal);
+                        lc = vec3(diffuse*1.0);// * tex3D(color_map, inter, normal);
                     //}  else {
                        // color += vec3(diffuse*1.0);
                     //}
                 } else {
-                    color += vec3(diffuse*0.0);
+                    lc = vec3(diffuse*0.0);
                 }
-                
+                color += mask*tex3D(color_map, inter/4.0, normal)*lc;
+                mask *= tex3D(color_map, inter, normal);
                 //return;
                 ro = inter;//+normal*.01;
                 rd = normalize(cosWeightedRandomHemisphereDirection(normal));
                 d++;
 
             } else {
-                color += vec3(0.0,0.0,0.7);
+                color += vec3(0.0,0.0,0.7)*mask;
                 d++;
                 //s++;
                 break;
