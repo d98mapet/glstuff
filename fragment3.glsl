@@ -144,7 +144,7 @@ vec3 calcNormal(in vec3 pos) {
 
 
 uniform float z_amp = 0.01; // ui(0.0, 1.0)
-uniform sampler2D color_map; // path(d:/shaders/red.png)
+uniform sampler2D color_map; // path(../../red.png)
 uniform sampler2D height_map; // path(d:/shaders/clouds.png)
 
 

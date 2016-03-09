@@ -175,6 +175,9 @@ void load_textures(const std::vector<UniformData>& ud, std::vector<texture_bindi
 			int x, y, n;
 			char* filename = (char*)ud[i].uniform_data;
 			unsigned char *data = stbi_load(filename, &x, &y, &n, 3);
+			if (data == 0) {
+				printf("Could not load texture %s\n", filename);
+			}
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, x, y, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -283,11 +286,8 @@ void drawStuff(GLuint vertexbuffer, GLuint uvbuffer) {
 
 }
 
-void setupRenderTexture(unsigned int width, unsigned int height, GLuint &fb, GLuint &rtt) {
-	glGenFramebuffers(1, &fb);
+void setupRenderTexture(unsigned int width, unsigned int height, GLuint fb, GLuint rtt) {
 	glBindFramebuffer(GL_FRAMEBUFFER, fb);
-
-	glGenTextures(1, &rtt);
 	glBindTexture(GL_TEXTURE_2D, rtt);
 
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, 0);
@@ -378,12 +378,12 @@ int main(int, char**)
 	uvbuffer = setupBuffer(&uv_data[0], sizeof(uv_data));
 
 #endif
-	int display_w, display_h;
-	glfwGetFramebufferSize(window, &display_w, &display_h);
-	GLuint fb = 0;
-	GLuint rtt = 0;
+	int display_w = 0, display_h = 0;
+	GLuint fb;
+	GLuint rtt;
+	glGenFramebuffers(1, &fb);
+	glGenTextures(1, &rtt);
 
-	setupRenderTexture(display_w, display_h, fb, rtt);
 	std::vector<UniformData> uniforms_fb;
 	std::string shader_errors_fb;
 
@@ -393,6 +393,7 @@ int main(int, char**)
 
 	GLfloat time = 0.0f;
 
+	float render_resolution_scale = 1.f / 3.f;
 	bool restart = false;
     while (!glfwWindowShouldClose(window))
     {  
@@ -415,6 +416,14 @@ int main(int, char**)
 				pID = loadShaders("../../vertex.glsl", "../../fragment3.glsl", uniforms, shader_errors);
 				load_textures(uniforms, texture_bindings);
 				restart = true;
+			}
+			{
+				float x = render_resolution_scale;
+				ImGui::SliderFloat("Render Scale", &x, 0.1f, 2.f);
+				if (x != render_resolution_scale) {
+					render_resolution_scale = x;
+					restart = true;
+				}
 			}
 			ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
@@ -453,12 +462,20 @@ int main(int, char**)
 
 
 		// Rendering
-		//int display_w, display_h;
-		glfwGetFramebufferSize(window, &display_w, &display_h);
+		{
+			int width, height;
+			glfwGetFramebufferSize(window, &width, &height);
+			if (width != display_w || height != display_h) {
+				display_w = width;
+				display_h = height;
+				restart = true;
+			}
+		}
 
-		glViewport(0, 0, display_w, display_h);
+		glViewport(0, 0, display_w * render_resolution_scale, display_h * render_resolution_scale);
 		glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
 		if (restart) {
+			setupRenderTexture(display_w * render_resolution_scale, display_h * render_resolution_scale, fb, rtt);
 			glClear(GL_COLOR_BUFFER_BIT);
 			time = 0;
 			restart = false;
