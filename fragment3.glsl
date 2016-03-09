@@ -5,6 +5,8 @@ in vec2 uv;
 layout(location = 0) out vec3 color;
 
 
+
+
 uniform float iGlobalTime;
 uniform float holeSize=1.3; //ui(0.0, 3.0)
 ////////////////////////////////////////////////////
@@ -79,7 +81,7 @@ float scene(vec3 pos) {
     float combine;
     float temp_res = box;
     
-    for (int cnt=0; cnt<4; cnt++) {
+    for (int cnt=0; cnt<3; cnt++) {
         vec3 a = mod(pos*s+1.0, 2.0)-1.0;
         
         s*=split;
@@ -203,7 +205,7 @@ vec3 tex3D( sampler2D tex, in vec3 p, in vec3 n ){
    
     n = max(n*n, 0.001); // n = max((abs(n) - 0.2)*7., 0.001); // n = max(abs(n), 0.001), etc.
     n /= (n.x + n.y + n.z ); 
-    return (texture2D(tex, p.yz)*n.x + texture2D(tex, p.zx)*n.y + texture2D(tex, p.xy)*n.z).xyz;
+    return (texture(tex, p.yz)*n.x + texture(tex, p.zx)*n.y + texture(tex, p.xy)*n.z).xyz;
  
     
 }
@@ -218,7 +220,7 @@ void main()
     vec3 ta = vec3( cx+iGlobalTime*time_boost, cy, cz);//cos(iGlobalTime), sin(iGlobalTime) );
     vec2 p = -1.0+2.0*uv;
 
-    p=HmdWarp(p);
+    //p=HmdWarp(p);
 
     if(abs(p.x)>1.0 || abs(p.y) > 1.0) {
         color = vec3(0.0);//texture(color_map, uv).rgb;
@@ -239,7 +241,7 @@ void main()
         float d = 0.0;
         ro = o_ro;
         rd = o_rd;
-        for (int depth=0; depth<5; depth++) {
+        for (int depth=0; depth<2; depth++) {
             float t = castRay(ro, rd, .01, max_dist);
             if (t>0.0) {
                 vec3 inter = vec3(ro+rd*t);

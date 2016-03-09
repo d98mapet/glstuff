@@ -3,14 +3,17 @@
 
 #include <imgui.h>
 #include "imgui_impl_glfw_gl3.h"
-#include <stdio.h>
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
+
+#include <stdio.h>
 #include <string>
 #include <fstream>
 #include <vector>
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include <iostream>
 
 static void error_callback(int error, const char* description)
 {
@@ -42,7 +45,7 @@ void create_uniform_float(std::string name, float value, float minValue, float m
 	uniform.name = name;
 	uniform.type = uniformtype::UT_FLOAT;
 	uniform.size = 3;
-	uniform.uniform_data = new float[uniform.size];
+	uniform.uniform_data = malloc(sizeof(float) * uniform.size);
 	float data[3]; // make into vector?
 	data[0] = value;
 	data[1] = minValue;
@@ -56,13 +59,13 @@ void create_uniform_sampler2D(std::string name, std::string file, UniformData& u
 	uniform.name = name;
 	uniform.type = uniformtype::UT_SAMP2D;
 	uniform.size = file.size() + 1;
-	uniform.uniform_data = new char[uniform.size];
+	uniform.uniform_data = malloc(uniform.size);
 	memcpy(uniform.uniform_data, file.c_str(), sizeof(char)*uniform.size);
 
 }
 
 void delete_uniform_data(UniformData &uniform) {
-	delete[] uniform.uniform_data;
+	free(uniform.uniform_data);
 }
 
 void parseNameValueDefault(const std::string line, std::string &name, float &value, float &minValue, float &maxValue) {
@@ -187,7 +190,7 @@ void load_textures(const std::vector<UniformData>& ud, std::vector<texture_bindi
 	}
 }
 
-GLuint loadShaders(const std::string vs, const std::string fs,std::vector<UniformData>& uniforms, std::vector<char> &shader_errors) {
+GLuint loadShaders(const std::string& vs, const std::string& fs, std::vector<UniformData>& uniforms, std::string& shader_errors) {
 	for (unsigned int i = 0; i < uniforms.size(); i++) {
 		delete_uniform_data(uniforms[i]);
 	}
@@ -313,7 +316,8 @@ int main(int, char**)
 #if __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "ImGui OpenGL3 example", NULL, NULL);
+//    GLFWwindow* window = glfwCreateWindow(1280, 720, "ImGui OpenGL3 example", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(640, 480, "ImGui OpenGL3 example", NULL, NULL);
 
 	glfwMakeContextCurrent(window);
 
@@ -342,8 +346,8 @@ int main(int, char**)
     ImVec4 clear_color = ImColor(114, 144, 154);
 #if 1
 	std::vector<UniformData> uniforms;
-	std::vector<char> shader_errors;
-	GLuint pID = loadShaders("d:/shaders/vertex.glsl", "d:/shaders/fragment3.glsl", uniforms, shader_errors);
+	std::string shader_errors;
+	GLuint pID = loadShaders("../../vertex.glsl", "../../fragment3.glsl", uniforms, shader_errors);
 
 	std::vector<texture_binding> texture_bindings;
 	load_textures(uniforms, texture_bindings);
@@ -381,9 +385,9 @@ int main(int, char**)
 
 	setupRenderTexture(display_w, display_h, fb, rtt);
 	std::vector<UniformData> uniforms_fb;
-	std::vector<char> shader_errors_fb;
+	std::string shader_errors_fb;
 
-	GLuint fbpid = loadShaders("d:/shaders/vertex.glsl", "d:/shaders/fragment.glsl", uniforms_fb, shader_errors_fb);
+	GLuint fbpid = loadShaders("../../vertex.glsl", "../../fragment.glsl", uniforms_fb, shader_errors_fb);
 	GLuint fbTexID = glGetUniformLocation(fbpid, "input_map");
 	// Main loop
 
@@ -408,12 +412,15 @@ int main(int, char**)
             //if (ImGui::Button("Test Window")) show_test_window ^= 1;
             //if (ImGui::Button("Another Window")) show_another_window ^= 1;
 			if (ImGui::Button("reload shader")) {
-				pID = loadShaders("d:/shaders/vertex.glsl", "d:/shaders/fragment3.glsl", uniforms, shader_errors);
+				pID = loadShaders("../../vertex.glsl", "../../fragment3.glsl", uniforms, shader_errors);
 				load_textures(uniforms, texture_bindings);
 				restart = true;
 			}
 			ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-			ImGui::Text(&shader_errors[0]);
+
+			if (shader_errors.size() > 0) {
+				ImGui::Text("%s", &shader_errors[0]);
+			}
 
 		}
 
@@ -475,7 +482,6 @@ int main(int, char**)
 			}
 		}
 
-
 		glUseProgram(pID);
 
 		for (unsigned int i = 0; i < texture_bindings.size(); i++) {
@@ -483,15 +489,15 @@ int main(int, char**)
 			glUniform1i(uniformID, i/*texture_bindings[i].texture_unit*/);
 			glActiveTexture(texture_bindings[i].texture_unit);
 			glBindTexture(GL_TEXTURE_2D, texture_bindings[i].texture);
-			
 		}
 
 		//special off screen render texture
-		uniformID = glGetUniformLocation(pID, "input_map");
-		glUniform1i(uniformID, texture_bindings.size()/*texture_bindings[i].texture_unit*/);
-		glActiveTexture(texture_bindings[texture_bindings.size()-1].texture_unit+1);
-		glBindTexture(GL_TEXTURE_2D, rtt);
-
+		if (texture_bindings.size() > 0) {
+			uniformID = glGetUniformLocation(pID, "input_map");
+			glUniform1i(uniformID, texture_bindings.size()/*texture_bindings[i].texture_unit*/);
+			glActiveTexture(texture_bindings[texture_bindings.size()-1].texture_unit+1);
+			glBindTexture(GL_TEXTURE_2D, rtt);
+		}
 		drawStuff(vertexbuffer, uvbuffer);
 
 		
