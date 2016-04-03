@@ -5,6 +5,8 @@
 #include "imgui_impl_glfw_gl3.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include "parser.h"
+#include "ogl_shader.h"
 
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
@@ -14,6 +16,8 @@
 #include <fstream>
 #include <vector>
 #include <iostream>
+#include <regex>
+#include <chrono>
 
 static void error_callback(int error, const char* description)
 {
@@ -23,22 +27,21 @@ static void error_callback(int error, const char* description)
 enum uniformtype {
 	UT_FLOAT,
 	UT_MAT4,
-	UT_SAMP2D
+	UT_SAMP2D,
+	UT_BUFFER
 };
-
 
 struct UniformData{
 	uniformtype type;
 	std::string name;
 	unsigned int size;
 	void* uniform_data;
-
 };
 
-struct texture_binding {
-	std::string sampler2D;
+struct TextureBinding {
+	std::string uniform_name;
 	GLuint texture;
-	GLuint texture_unit;
+	GLenum target;
 };
 
 void create_uniform_float(std::string name, float value, float minValue, float maxValue, UniformData& uniform) {
@@ -51,127 +54,73 @@ void create_uniform_float(std::string name, float value, float minValue, float m
 	data[1] = minValue;
 	data[2] = maxValue;
 	memcpy(uniform.uniform_data, &data[0], sizeof(float)*uniform.size);
-		//uniform.uniform_data = &v;
-
 }
 
-void create_uniform_sampler2D(std::string name, std::string file, UniformData& uniform) {
+void create_uniform_sampler2d(std::string name, std::string file, UniformData& uniform) {
 	uniform.name = name;
 	uniform.type = uniformtype::UT_SAMP2D;
 	uniform.size = file.size() + 1;
 	uniform.uniform_data = malloc(uniform.size);
 	memcpy(uniform.uniform_data, file.c_str(), sizeof(char)*uniform.size);
+}
 
+void create_uniform_buffer_sampler(const std::string &name, UniformData &uniform) {
+	uniform.name = name;
+	uniform.type = uniformtype::UT_BUFFER;
+	uniform.size = 0;
+	uniform.uniform_data = 0;
 }
 
 void delete_uniform_data(UniformData &uniform) {
 	free(uniform.uniform_data);
 }
 
-void parseNameValueDefault(const std::string line, std::string &name, float &value, float &minValue, float &maxValue) {
-	std::string valid_chars = "abcdefghijklmnopqrstuvwxyz_-";
-	std::size_t start = line.find_first_of(valid_chars);
-	std::size_t end = line.find_first_of(" =;", start);
-	name = line.substr(start, end - start);
-	std::string value_defaults = line.substr(end);
-	//parse optional UI things
-	start = value_defaults.find("ui(");
-	if (start != std::string::npos) {
-		start = start + 3;
-		end = value_defaults.find_first_of(",", start);
-		std::string tempS = value_defaults.substr(start, end - start);
-		minValue = (float)atof(tempS.c_str());
-		start = end+1;
-		end = value_defaults.find_first_of(")", start);
-		tempS = value_defaults.substr(start, end - start);
-		maxValue = (float)atof(tempS.c_str());
-
-	}
-
-
-	start = value_defaults.find_first_of("=");
-	if (start == std::string::npos) {
-		return; // no default given
-	}
-	else {
-		start += 1;
-		end = value_defaults.find_first_of(";", start);
-		std::string tempS = value_defaults.substr(start, end - start);
-		value = (float)atof(tempS.c_str());
-	}
-
-}
-
-bool parseUniformFloat(const std::string line, UniformData &ud) {
-	std::size_t found = line.find("uniform");
-	if (found == std::string::npos) {
-		return false;
-	}
-	std::string temp_line = line.substr(found + 7); //strip uniform
-
-	found = temp_line.find("float");
-	if (found != std::string::npos) {
-		std::string name;
-		float value = 0.5f;
-		float minValue = 0.0f;
-		float maxValue = 1.0f;
-
-		parseNameValueDefault(temp_line.substr(found+5), name, value, minValue, maxValue);
-		if (name == "iGlobalTime") {
-			return false;
+bool parse_uniform(const std::string &line, UniformData &ud) {
+	UniformParseResult result;
+	if (parse_uniform(line, result)) {
+		if (result.uniform_type == "float") {
+			if (result.uniform_name == "iGlobalTime") {
+				return false;
+			}
+			float value = 0.5f;
+			float minValue = 0.0f;
+			float maxValue = 1.0f;
+			parse_value(result.default_value, value);
+			if (result.comment_name == "ui") {
+				std::smatch m;
+				const std::string re = "\\s*([-\\d\\.]+)\\s*,\\s*([-\\d\\.]+)";
+				std::regex_search(result.comment_value, m, std::regex(re));
+				if (!m.empty() && m.size() == 3) {
+					parse_value(m[1], minValue);
+					parse_value(m[2], maxValue);
+				}
+			}
+			create_uniform_float(result.uniform_name, value, minValue, maxValue, ud);
+			return true;
+		} else if (result.uniform_type == "sampler2D") {
+			create_uniform_sampler2d(result.uniform_name, result.comment_name == "path" ? result.comment_value : "", ud);
+			return true;
+		} else if (result.uniform_type == "usamplerBuffer") {
+			create_uniform_buffer_sampler(result.uniform_name, ud);
+			return true;
 		}
-		create_uniform_float(name, value, minValue, maxValue, ud);
 	}
-	else {
-		return false;
-	}
-	return true;
+	return false;
 }
 
-bool parseUniformSampler2D(const std::string line, UniformData &ud) {
-	std::size_t found = line.find("uniform");
-	if (found == std::string::npos) {
-		return false;
-	}
-	std::string temp_line = line.substr(found + 7); //strip uniform
-
-	found = temp_line.find("sampler2D");
-	if (found != std::string::npos) {
-		std::string sampler_name;
-		std::string valid_chars = "abcdefghijklmnopqrstuvwxyz_-";
-		std::size_t start = temp_line.find_first_of(valid_chars, found + 9);
-		std::size_t end = temp_line.find_first_of(" ;", start);
-		std::string name = temp_line.substr(start, end - start);
-	
-		std::string file;
-		found = temp_line.find("path(");
-		if (found == std::string::npos) {
-			return false;
-		}
-		start = found + 5;
-		end = temp_line.find_first_of(")", start);
-		file = temp_line.substr(start, end - start);
-
-		create_uniform_sampler2D(name, file, ud);
-	}
-	else {
-		return false;
-	}
-	return true;
-}
-
-void load_textures(const std::vector<UniformData>& ud, std::vector<texture_binding>& texture_bindings) {
+void load_textures(const std::vector<UniformData>& ud, std::vector<TextureBinding>& texture_bindings) {
 	texture_bindings.clear();
-	GLuint texture_unit = GL_TEXTURE0;
 	for (unsigned int i = 0; i < ud.size(); i++) {
 		if (ud[i].type == uniformtype::UT_SAMP2D) {
 			if (ud[i].name == "input_map") {
 				continue; //special case for off screen fb
 			}
-			texture_binding tb;
+			TextureBinding tb;
 
+			tb.target = GL_TEXTURE_2D;
 			glGenTextures(1, &tb.texture);
 			glBindTexture(GL_TEXTURE_2D, tb.texture);
+
 			int x, y, n;
 			char* filename = (char*)ud[i].uniform_data;
 			unsigned char *data = stbi_load(filename, &x, &y, &n, 3);
@@ -179,89 +128,110 @@ void load_textures(const std::vector<UniformData>& ud, std::vector<texture_bindi
 				printf("Could not load texture %s\n", filename);
 			}
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, x, y, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+			stbi_image_free(data);
+
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-			stbi_image_free(data);
-			tb.texture_unit = texture_unit;
-			texture_unit++; //This cannot be OK.
-			tb.sampler2D = ud[i].name;
+			tb.uniform_name = ud[i].name;
 			texture_bindings.push_back(tb);
 
+		} else if (ud[i].type == uniformtype::UT_BUFFER) {
+			std::cout << "Creating buffer uniform " << ud[i].name << std::endl;
+			TextureBinding tb;
+
+			tb.target = GL_TEXTURE_BUFFER;
+			GLuint buffer;
+			glGenBuffers(1, &buffer);
+			glBindBuffer(GL_TEXTURE_BUFFER, buffer);
+float bvh[120] = {
+-1.5, -1.5, -1.5, 1,
+1.5, 1.5, 1.5, 0,
+-1.5, -1.5, -1.5, 1,
+1.5, 1.5, -0.5, 7,
+-1.5, -1.5, -1.5, 1,
+1.5, -0.5, -0.5, 3,
+-1, -1, -1, -1,
+0.5, 0, 0, 0,
+1, -1, -1, -1,
+0.5, 0, 0, 0,
+-1.5, 0.5, -1.5, 1,
+1.5, 1.5, -0.5, 3,
+-1, 1, -1, -1,
+0.5, 0, 0, 0,
+1, 1, -1, -1,
+0.5, 0, 0, 0,
+-1.5, -1.5, 0.5, 1,
+1.5, 1.5, 1.5, 0,
+-1.5, -1.5, 0.5, 1,
+1.5, -0.5, 1.5, 3,
+-1, -1, 1, -1,
+0.5, 0, 0, 0,
+1, -1, 1, -1,
+0.5, 0, 0, 0,
+-1.5, 0.5, 0.5, 1,
+1.5, 1.5, 1.5, 0,
+-1, 1, 1, -1,
+0.5, 0, 0, 0,
+1, 1, 1, -1,
+0.5, 0, 0, 0
+};
+			glBufferData(GL_TEXTURE_BUFFER, 120 * 4, bvh, GL_STATIC_DRAW);
+
+			glGenTextures(1, &tb.texture);
+			glBindTexture(GL_TEXTURE_BUFFER, tb.texture);
+			glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32UI, buffer);
+			tb.uniform_name = ud[i].name;
+			texture_bindings.push_back(tb);
 		}
 	}
 }
 
-GLuint loadShaders(const std::string& vs, const std::string& fs, std::vector<UniformData>& uniforms, std::string& shader_errors) {
+std::string read_file(std::istream &input_stream) {
+	input_stream.seekg(0, std::ios::end);
+	size_t size = input_stream.tellg();
+	std::string buffer;
+	buffer.resize(size);
+	input_stream.seekg(0);
+	input_stream.read(&buffer[0], size);
+	return buffer;
+}
+
+GLuint load_shaders(const std::string& vs, const std::string& fs, std::vector<UniformData>& uniforms, std::string& shader_errors) {
 	for (unsigned int i = 0; i < uniforms.size(); i++) {
 		delete_uniform_data(uniforms[i]);
 	}
 	uniforms.clear();
 
-	std::string vertexCode;
-	std::string fragmentCode;
-	std::string tempLine;
+	std::string vertex_code;
+	std::string fragment_code;
 
 	std::ifstream vtext(vs);
 	if (vtext.is_open()) {
-		tempLine = "";
-		while (getline(vtext, tempLine)) {
-			vertexCode += tempLine + "\n";
-		}
+		vertex_code = read_file(vtext);
 	}
 	std::ifstream ftext(fs);
 	if (ftext.is_open()) {
-		tempLine = "";
-		while (getline(ftext, tempLine)) {
-			fragmentCode += tempLine + "\n";
-			UniformData ud;
-			if (parseUniformFloat(tempLine, ud)) {
-				uniforms.push_back(ud);
-			}
-			else if (parseUniformSampler2D(tempLine, ud)) {
+		fragment_code = read_file(ftext);
+		std::string line;
+		std::istringstream iss(fragment_code);
+		UniformData ud;
+		while (std::getline(iss, line)) {
+			if (parse_uniform(line, ud)) {
 				uniforms.push_back(ud);
 			}
 		}
 	}
-
-	GLuint vsID = glCreateShader(GL_VERTEX_SHADER);
-	GLuint fsID = glCreateShader(GL_FRAGMENT_SHADER);
-	char const* vcp = vertexCode.c_str();
-	glShaderSource(vsID, 1, &vcp, NULL);
-	glCompileShader(vsID);
-
-	char const* fcp = fragmentCode.c_str();
-	glShaderSource(fsID, 1, &fcp, NULL);
-	glCompileShader(fsID);
-
-	GLint Result = GL_FALSE;
-	int InfoLogLength;
-	glGetShaderiv(fsID, GL_COMPILE_STATUS, &Result);
-	glGetShaderiv(fsID, GL_INFO_LOG_LENGTH, &InfoLogLength);
-	if (InfoLogLength > 0){
-		//std::vector<char> FragmentShaderErrorMessage(InfoLogLength + 1);
-		shader_errors.resize(InfoLogLength + 1);
-		glGetShaderInfoLog(fsID, InfoLogLength, NULL, &shader_errors[0]);
-		printf("%s\n", &shader_errors[0]);
+	GLuint program_id = load_shaders(vertex_code, fragment_code, shader_errors);
+	if (shader_errors.length() > 0) {
+		std::cout << shader_errors;
 	}
-
-
-
-
-	GLuint pID = glCreateProgram();
-	glAttachShader(pID, vsID);
-	glAttachShader(pID, fsID);
-	glLinkProgram(pID);
-	glDetachShader(pID, vsID);
-	glDetachShader(pID, fsID);
-	glDeleteShader(vsID);
-	glDeleteShader(fsID);
-	return pID;
+	return program_id;
 
 }
 
-GLuint setupBuffer(GLfloat *data, unsigned int data_size) {
+GLuint setup_buffer(GLfloat *data, unsigned int data_size) {
 	GLuint buffer;
 	glGenBuffers(1, &buffer);
 	glBindBuffer(GL_ARRAY_BUFFER, buffer);
@@ -269,7 +239,7 @@ GLuint setupBuffer(GLfloat *data, unsigned int data_size) {
 	return buffer;
 }
 
-void drawStuff(GLuint vertexbuffer, GLuint uvbuffer) {
+void draw_stuff(GLuint vertexbuffer, GLuint uvbuffer) {
 
 	glEnableVertexAttribArray(0);
 
@@ -286,13 +256,13 @@ void drawStuff(GLuint vertexbuffer, GLuint uvbuffer) {
 
 }
 
-void setupRenderTexture(unsigned int width, unsigned int height, GLuint fb, GLuint rtt) {
+void setup_render_texture(unsigned int width, unsigned int height, GLuint fb, GLuint rtt) {
 	glBindFramebuffer(GL_FRAMEBUFFER, fb);
 	glBindTexture(GL_TEXTURE_2D, rtt);
 
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, 0);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -306,6 +276,8 @@ void setupRenderTexture(unsigned int width, unsigned int height, GLuint fb, GLui
 
 int main(int, char**)
 {
+	const char *fragment_shader = "../../fragment3.glsl";
+
     // Setup window
     glfwSetErrorCallback(error_callback);
     if (!glfwInit())
@@ -347,9 +319,9 @@ int main(int, char**)
 #if 1
 	std::vector<UniformData> uniforms;
 	std::string shader_errors;
-	GLuint pID = loadShaders("../../vertex.glsl", "../../fragment3.glsl", uniforms, shader_errors);
+	GLuint pID = load_shaders("../../vertex.glsl", fragment_shader, uniforms, shader_errors);
 
-	std::vector<texture_binding> texture_bindings;
+	std::vector<TextureBinding> texture_bindings;
 	load_textures(uniforms, texture_bindings);
 
 //	float val = *(float*)(uniforms[0].uniform_data);
@@ -373,9 +345,9 @@ int main(int, char**)
 	};
 
 	GLuint vertexbuffer;
-	vertexbuffer = setupBuffer(&vertex_data[0], sizeof(vertex_data));
+	vertexbuffer = setup_buffer(&vertex_data[0], sizeof(vertex_data));
 	GLuint uvbuffer;
-	uvbuffer = setupBuffer(&uv_data[0], sizeof(uv_data));
+	uvbuffer = setup_buffer(&uv_data[0], sizeof(uv_data));
 
 #endif
 	int display_w = 0, display_h = 0;
@@ -387,7 +359,7 @@ int main(int, char**)
 	std::vector<UniformData> uniforms_fb;
 	std::string shader_errors_fb;
 
-	GLuint fbpid = loadShaders("../../vertex.glsl", "../../fragment.glsl", uniforms_fb, shader_errors_fb);
+	GLuint fbpid = load_shaders("../../vertex.glsl", "../../fragment.glsl", uniforms_fb, shader_errors_fb);
 	GLuint fbTexID = glGetUniformLocation(fbpid, "input_map");
 	// Main loop
 
@@ -413,7 +385,8 @@ int main(int, char**)
             //if (ImGui::Button("Test Window")) show_test_window ^= 1;
             //if (ImGui::Button("Another Window")) show_another_window ^= 1;
 			if (ImGui::Button("reload shader")) {
-				pID = loadShaders("../../vertex.glsl", "../../fragment3.glsl", uniforms, shader_errors);
+				shader_errors.clear();
+				pID = load_shaders("../../vertex.glsl", fragment_shader, uniforms, shader_errors);
 				load_textures(uniforms, texture_bindings);
 				restart = true;
 			}
@@ -435,9 +408,9 @@ int main(int, char**)
 
         // 2. Show another simple window, this time using an explicit Begin/End pair
 		if (uniforms.size() != 0) {
-            ImGui::SetNextWindowSize(ImVec2(200,200), ImGuiSetCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(200, 200), ImGuiSetCond_FirstUseEver);
             ImGui::Begin("Shader Parameters");
-            ImGui::Text("Hello");
+//            ImGui::Text("Hello");
 			for (unsigned int i = 0; i < uniforms.size(); i++) {
 				if (uniforms[i].type != uniformtype::UT_FLOAT) {
 					continue;
@@ -475,7 +448,7 @@ int main(int, char**)
 		glViewport(0, 0, display_w * render_resolution_scale, display_h * render_resolution_scale);
 		glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
 		if (restart) {
-			setupRenderTexture(display_w * render_resolution_scale, display_h * render_resolution_scale, fb, rtt);
+			setup_render_texture(display_w * render_resolution_scale, display_h * render_resolution_scale, fb, rtt);
 			glClear(GL_COLOR_BUFFER_BIT);
 			time = 0;
 			restart = false;
@@ -502,20 +475,21 @@ int main(int, char**)
 		glUseProgram(pID);
 
 		for (unsigned int i = 0; i < texture_bindings.size(); i++) {
-			uniformID = glGetUniformLocation(pID, texture_bindings[i].sampler2D.c_str());
-			glUniform1i(uniformID, i/*texture_bindings[i].texture_unit*/);
-			glActiveTexture(texture_bindings[i].texture_unit);
-			glBindTexture(GL_TEXTURE_2D, texture_bindings[i].texture);
+			uniformID = glGetUniformLocation(pID, texture_bindings[i].uniform_name.c_str());
+			glUniform1i(uniformID, i);
+			glActiveTexture(GL_TEXTURE0 + i);
+			glBindTexture(texture_bindings[i].target, texture_bindings[i].texture);
 		}
 
 		//special off screen render texture
 		if (texture_bindings.size() > 0) {
 			uniformID = glGetUniformLocation(pID, "input_map");
-			glUniform1i(uniformID, texture_bindings.size()/*texture_bindings[i].texture_unit*/);
-			glActiveTexture(texture_bindings[texture_bindings.size()-1].texture_unit+1);
+			GLuint unit = texture_bindings.size();
+			glUniform1i(uniformID, unit);
+			glActiveTexture(GL_TEXTURE0 + unit);
 			glBindTexture(GL_TEXTURE_2D, rtt);
 		}
-		drawStuff(vertexbuffer, uvbuffer);
+		draw_stuff(vertexbuffer, uvbuffer);
 
 		
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -525,7 +499,7 @@ int main(int, char**)
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, rtt);
 		glProgramUniform1i(fbpid, fbTexID, 0);
-		drawStuff(vertexbuffer, uvbuffer);
+		draw_stuff(vertexbuffer, uvbuffer);
 		ImGui::Render();
 
         glfwSwapBuffers(window);

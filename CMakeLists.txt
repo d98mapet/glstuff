@@ -23,6 +23,8 @@ ENDIF ()
 
 ADD_EXECUTABLE(glstuff
 	main.cpp
+	parser.cpp
+	ogl_shader.cpp
 	imgui/imgui.cpp
   	imgui/imgui_draw.cpp
   	imgui/examples/libs/gl3w/GL/gl3w.c
