@@ -5,6 +5,10 @@
 #include "imgui_impl_glfw_gl3.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#define TINYOBJLOADER_IMPLEMENTATION // define this in only *one* .cc
+#include "tiny_obj_loader.h"
+#include "structs.h"
+#include "ads.h"
 
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
@@ -14,32 +18,14 @@
 #include <fstream>
 #include <vector>
 #include <iostream>
+//#include <algorithm>
 
 static void error_callback(int error, const char* description)
 {
 	fprintf(stderr, "Error %d: %s\n", error, description);
 }
 
-enum uniformtype {
-	UT_FLOAT,
-	UT_MAT4,
-	UT_SAMP2D
-};
 
-
-struct UniformData{
-	uniformtype type;
-	std::string name;
-	unsigned int size;
-	void* uniform_data;
-
-};
-
-struct texture_binding {
-	std::string sampler2D;
-	GLuint texture;
-	GLuint texture_unit;
-};
 
 void create_uniform_float(std::string name, float value, float minValue, float maxValue, UniformData& uniform) {
 	uniform.name = name;
@@ -120,6 +106,18 @@ bool parseUniformFloat(const std::string line, UniformData &ud) {
 		if (name == "iGlobalTime") {
 			return false;
 		}
+		if (name == "triangle_texture_stride") {
+			return false;
+		}
+		if (name == "bvh_texture_stride") {
+			return false;
+		}
+		if (name == "num_tris") {
+			return false;
+		}
+		if (name == "num_nodes") {
+			return false;
+		}
 		create_uniform_float(name, value, minValue, maxValue, ud);
 	}
 	else {
@@ -167,6 +165,12 @@ void load_textures(const std::vector<UniformData>& ud, std::vector<texture_bindi
 		if (ud[i].type == uniformtype::UT_SAMP2D) {
 			if (ud[i].name == "input_map") {
 				continue; //special case for off screen fb
+			}
+			if (ud[i].name == "triangle_texture") {
+				continue; //special case for triangle data
+			}
+			if (ud[i].name == "bvh_texture") {
+				continue; //special case for triangle data
 			}
 			texture_binding tb;
 
@@ -347,7 +351,7 @@ int main(int, char**)
 #if 1
 	std::vector<UniformData> uniforms;
 	std::string shader_errors;
-	GLuint pID = loadShaders("../../vertex.glsl", "../../fragment3.glsl", uniforms, shader_errors);
+	GLuint pID = loadShaders("../../vertex.glsl", "../../raytrace.glsl", uniforms, shader_errors);
 
 	std::vector<texture_binding> texture_bindings;
 	load_textures(uniforms, texture_bindings);
@@ -388,7 +392,13 @@ int main(int, char**)
 	std::string shader_errors_fb;
 
 	GLuint fbpid = loadShaders("../../vertex.glsl", "../../fragment.glsl", uniforms_fb, shader_errors_fb);
-	GLuint fbTexID = glGetUniformLocation(fbpid, "input_map");
+	GLint fbTexID = glGetUniformLocation(fbpid, "input_map");
+	GLint g_time = glGetUniformLocation(fbpid, "iGlobalTime");
+	std::vector<triangle_texture> tri_textures;
+	std::vector<bvh_texture> bvh_textures;
+	load_obj("../../sponza.obj", tri_textures, bvh_textures);
+	GLuint tri_texture_id = glGetUniformLocation(fbpid, "triangle_texture");
+
 	// Main loop
 
 	GLfloat time = 0.0f;
@@ -397,7 +407,6 @@ int main(int, char**)
 	bool restart = false;
     while (!glfwWindowShouldClose(window))
     {  
-		glBindFramebuffer(GL_FRAMEBUFFER, fb);
 
 		glfwPollEvents();
 
@@ -413,7 +422,7 @@ int main(int, char**)
             //if (ImGui::Button("Test Window")) show_test_window ^= 1;
             //if (ImGui::Button("Another Window")) show_another_window ^= 1;
 			if (ImGui::Button("reload shader")) {
-				pID = loadShaders("../../vertex.glsl", "../../fragment3.glsl", uniforms, shader_errors);
+				pID = loadShaders("../../vertex.glsl", "../../raytrace.glsl", uniforms, shader_errors);
 				load_textures(uniforms, texture_bindings);
 				restart = true;
 			}
@@ -479,35 +488,38 @@ int main(int, char**)
 			glClear(GL_COLOR_BUFFER_BIT);
 			time = 0;
 			restart = false;
+		} else {
+			glBindFramebuffer(GL_FRAMEBUFFER, fb);
+			glBindTexture(GL_TEXTURE_2D, rtt);
 		}
 		GLint uniformID = glGetUniformLocation(pID, "iGlobalTime");
 		glProgramUniform1f(pID, uniformID, time);
 		uniformID = glGetUniformLocation(fbpid, "iGlobalTime");
 		glProgramUniform1f(fbpid, uniformID, time);
-		time = time + 1.0f;
+		
 		
 		//uniformID = glGetUniformLocation(pID, "iResolution");
 		//glProgramUniform2f(pID, uniformID, (float)display_w, float(display_h));
-
+		
 		for (unsigned int i = 0; i < uniforms.size(); i++) {
 			if (uniforms[i].type == uniformtype::UT_FLOAT) {
 				//if (uniforms[i].name == "iGlobalTime"){ //Move this out of main loop, maybe cull list?
-				//	continue;
+				//  continue;
 				//}
 				uniformID = glGetUniformLocation(pID, uniforms[i].name.c_str());
 				glProgramUniform1f(pID, uniformID, *(float *)(uniforms[i].uniform_data));
 			}
 		}
-
+		
 		glUseProgram(pID);
-
+		
 		for (unsigned int i = 0; i < texture_bindings.size(); i++) {
 			uniformID = glGetUniformLocation(pID, texture_bindings[i].sampler2D.c_str());
 			glUniform1i(uniformID, i/*texture_bindings[i].texture_unit*/);
 			glActiveTexture(texture_bindings[i].texture_unit);
 			glBindTexture(GL_TEXTURE_2D, texture_bindings[i].texture);
 		}
-
+		
 		//special off screen render texture
 		if (texture_bindings.size() > 0) {
 			uniformID = glGetUniformLocation(pID, "input_map");
@@ -515,6 +527,33 @@ int main(int, char**)
 			glActiveTexture(texture_bindings[texture_bindings.size()-1].texture_unit+1);
 			glBindTexture(GL_TEXTURE_2D, rtt);
 		}
+		//special triangle/bvh data texture
+		//if (texture_bindings.size() > 0) {
+			//tri
+			uniformID = glGetUniformLocation(pID, "triangle_texture");
+			glUniform1i(uniformID, texture_bindings.size() + 1/*texture_bindings[i].texture_unit*/);
+			glActiveTexture(texture_bindings[texture_bindings.size() - 1].texture_unit + 2);
+			glBindTexture(GL_TEXTURE_2D, tri_textures[0].texture_id);
+			uniformID = glGetUniformLocation(pID, "triangle_texture_stride");
+			glUniform1f(uniformID, tri_textures[0].texture_stride);
+			uniformID = glGetUniformLocation(pID, "num_tris");
+			glUniform1f(uniformID, tri_textures[0].num_tris);
+			//bvh
+			uniformID = glGetUniformLocation(pID, "bvh_texture");
+			glUniform1i(uniformID, texture_bindings.size() + 2/*texture_bindings[i].texture_unit*/);
+			glActiveTexture(texture_bindings[texture_bindings.size() - 1].texture_unit + 3);
+			glBindTexture(GL_TEXTURE_2D, bvh_textures[0].texture_id);
+			uniformID = glGetUniformLocation(pID, "bvh_texture_stride");
+			glUniform1f(uniformID, bvh_textures[0].texture_stride);
+			uniformID = glGetUniformLocation(pID, "num_nodes");
+			glUniform1f(uniformID, bvh_textures[0].num_nodes);
+		//}
+		uniformID = glGetUniformLocation(pID, "iGlobalTime");
+		glProgramUniform1f(pID, uniformID, time);
+		float tval;
+		glGetUniformfv(pID, uniformID, &tval);
+		time = time + 1.0f;
+
 		drawStuff(vertexbuffer, uvbuffer);
 
 		
